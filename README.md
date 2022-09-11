@@ -3,10 +3,12 @@
 In this workflow, we build a linear regression model using an RNA-seq dataset with samples of known quiescence depth, then use the model to predict the quiescence depth of another RNA-seq dataset. The training data is a bulk RNA-seq dataset of rat embryonic fibroblasts (REF) serum starved for a range of 2 to 16 days. The test data is an scRNA-seq dataset of human lung cancer cells in various stages of development. We start with the train and test as raw counts, and we preprocess the data by filtering lowly expressed genes and (in the case of scRNA-seq) cells with low expression levels. Then, we normalize and VST the data. After that, we merge the train and test data and remove batch effects between them. Lastly, we build a linear regression model on the train data and use it to make predictions on the test data.
 
 ### Train data preprocessing (bulk RNA-seq)
+Load in source file
+```
+source("QDSFunctions.R")
+```
 To preprocess the training data, subset the genes to those with CPM > 0.5 in at least 2 samples. Then, normalize and VST the data using DESeq2.
 ```
-#Load in source file
-source("QDSFunctions.R")
 #Read in train data (raw counts)
 train_raw = read.delim("/path/to/train/data") 
 
