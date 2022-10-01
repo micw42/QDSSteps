@@ -8,85 +8,82 @@ source("/xdisk/guangyao/michellewei/QDSWorkflow/QDSFunctions.R")
 ```
 
 ### Train data preprocessing (bulk RNA-seq)
-To preprocess the training data, subset the genes to those with CPM > 0.5 in at least 2 samples. Then, normalize and VST the data using DESeq2.
+Start with a table of raw counts, where rows are genes and columns are samples. Use the `bulk_preproc()` function to filter, normalize, and VST the data.
 ```
 #Read in train data (raw counts)
 train_raw = read.delim("/path/to/train/data") 
 
-#Filter lowly expressed genes
-train_df_norm = train_raw %>% distinct(Geneid, .keep_all=T) %>%
-    column_to_rownames(var="Geneid") %>%
-    bulk_preproc() 
+#Filter lowly expressed genes, normalize, and VST
+train_df_norm = train_raw %>% bulk_preproc() 
 ```
 
 ### Test data preprocessing (scRNA-seq)
-To process the test data, filter out cells and genes that have low expression values. Then, normalize and VST the data using Seurat.
+Start with a table of raw counts, where rows are genes and columns are samples. Use the `get_seurat_obj()` function to create a Seurat object from the table and calculate QC metrics. To process the test data, filter out cells and genes 
 ```
 #Read in test data (raw counts)
 test_raw = read.delim("/path/to/test/data")
 
-#Filter cells
-test_filt = test_raw %>% distinct(Geneid, .keep_all=T) %>%
-    column_to_rownames(var="Geneid") %>%
-    filter_pipeline()
+#Create a Seurat object
+obj = test_raw %>% get_seurat_obj()
+```
+Use the `make_hist()` function to make histograms of the QC metrics. Use the histograms to decide the QC metric thresholds to use to filter the cells. `ann_df` is an optional table with additional sample metadata that can be used to group the histograms. The first column of `ann_df` should be the sample names. To group the histograms, set `grouping` to the name of the desired `ann_df` column.
+```
+#Make histograms of QC metrics (nUMI, nGene, log10GenesPerUMI, and mitoRatio)
+make_hist(obj, ann_df = NULL, grouping=NULL, metric="nUMI")
+make_hist(obj, ann_df = NULL, grouping=NULL, metric="nGene")
+make_hist(obj, ann_df = NULL, grouping=NULL, metric="log10GenesPerUMI")
+make_hist(obj, ann_df = NULL, grouping=NULL, metric="mitoRatio")
 
-#Filter genes
-good_genes = test_norm %>% get_good_genes(prop=0.3)
-test_norm = test_filt %>% v2_sct() %>%
-    rownames_to_column(var="Geneid") %>%
-    filter(Geneid %in% good_genes)
+```
+Use the histograms to decide the QC metric thresholds to use to filter the cells. Use the `sc_preproc()` function to filter the cells by QC metric, filter the genes by raw count, and normalize and VST the data. `prop` is the minimum proportion of cells with raw count > 0 that a gene must have in order to pass the filter.
+```
+test_norm = obj %>% sc_preproc(prop=0.3, nUMI_filt=500, nGene_filt=250, log10_filt=0.75, mito_filt=0.2)
+
 ```
 
 ### Merge train and test 
-The test dataset uses human gene names, while the train dataset uses rat Ensembl IDs. Convert the human gene names in the test dataset to human Ensembl IDs using a gene map file from gProfiler, then convert the human Ensembl IDs to rat Ensembl IDs using a homology file from Ensembl.
+To merge the train and test datasets, their gene IDs must match. If the train and test dataset use different species Ensembl IDs, convert the IDs to the same species using the `convert_species()` function. Specify the names of the homology type, confidence, original ID, and new ID columns of the homology table using the`hom_type`, `conf`, `old_id`, and `new_id` parameters, respectively. If a dataset uses gene symbols instead of IDs, convert the gene symbols to Ensembl IDs using the `convert_symbol()` function before converting to the correct species. For steps to get the `gene_map` and `hm` tables, see the chapter. 
 ```
 gene_map = read.csv("/path/to/gene/map")
 hm = read.delim("/path/to/homology/file")
 
-test_conv = test_norm %>% id_convert(gene_map = gene_map) %>%
-    convert_species(hm=hm)
+test_conv = test_norm %>% convert_symbol(gene_map = gene_map) %>%
+    convert_species(hm=hm, hom_type = "Rat.homology.type",
+                conf="Rat.orthology.confidence..0.low..1.high.",
+                old_id="Gene.stable.ID", new_id="Rat.gene.stable.ID")
 ```
-Inner join the train and test dataset and remove batch effects using the sva package.
+Use the `run_ComBat()` function to inner join the train and test dataset and remove batch effects. This will output a named list with the new train and test tables.
 ```
-train_df = readRDS("/xdisk/guangyao/michellewei/arrayValTest3/REF_rat_d2d16_QDSInput.rds")
-test_df = readRDS("/xdisk/guangyao/michellewei/epithelial_cells_conv.rds")
-
 out = run_ComBat(train_df, test_df)
 ```
 
 ### Build linear regression model
-Add a column of y values to the train data.
+Use the `alpha_test()` function to test a sequence of 20 alpha values and get the corresponding cross-validation error. Set `y` as a vector of y values corresponding to the training samples. Y values should be numeric and correspond to the quiescence depth of the samples. For example, they can be the number of serum starvation days.
 ```
 train = out$train
 test = out$test
-
-train$y = rep(c(2:4, seq(6, 16, by=2)), each=3)
+alpha_out = alpha_test(x=train, y=c("vector", "of", "y", "values"),
+                        20, family="gaussian", type.measure="mse")
 ```
-Test a sequence of 20 alpha values to find the optimal one.
+Get the model with the alpha value that gives the lowest cross-validation error. Use this model to predict the QDS of the test samples.
 ```
-alpha_out = alpha_test(train, 20, family="gaussian", type.measure="mse")
-alpha_df = out$err
-fit_list = out$fit
+alpha_df = alpha_out$err
+fit_list = alpha_out$fit
 min_idx = which.min(alpha_df$Errors)
 opt_fit = fit_list[[min_idx]]
-```
-Use the model with the optimal alpha to predict the QDS of the test samples.
-```
 pred_df = data.frame(sample_id=rownames(test),
         pred=predict(opt_fit, newx=as.matrix(test), s=opt_fit$lambda.min, type="response")) %>%
         rename(QDS=s1)
 ```
 
 ### Visualize results
-Merge the prediction table with sample metadata table.
+Use the `make_boxplot()` function to make a boxplot of test sample QDS values. `ann_df` is a sample metadata table, where the first column contains sample names. Set `grouping` as the column of `ann_df` to use to group the boxplot.
 ```
-ann_df = read.delim("/path/to/sample/metadata/")
-pred_df = inner_join(pred_df, ann_df, by="sample_id")
+make_boxplot(pred_df, ann_df, grouping="variable_to_group_by")
 ```
-Make a boxplot of test sample QDS values (replace Condition with relevant variable name).
+Use the `make_grouped_hist()` function to make a histogram of test sample QDS values grouped by 2 variables. This will output a series of histograms grouped by `grouping1`, with the density curves on each individual histogram grouped by `grouping2`.
 ```
-ggplot(pred_df, aes(x = Condition, y = QDS)) + geom_boxplot(outlier.shape = NA) + 
-        geom_jitter(shape = 16, height = 0, width = 0.2) 
+make_grouped_hist(pred_df, ann_df, grouping1="1st_grouping_variable", grouping2="2nd_grouping_variable")
 ```
 
 
