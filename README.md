@@ -67,15 +67,9 @@ test = out$test
 alpha_out = alpha_test(x=train, y=c("vector", "of", "y", "values"),
                         20, family="gaussian", type.measure="mse")
 ```
-Get the model with the alpha value that gives the lowest cross-validation error. Use this model to predict the QDS of the test samples.
+Use the `get_pred_df()` function to get the model with the optimal alpha value and use it to predict the QDS of the test samples.
 ```
-alpha_df = alpha_out$err
-fit_list = alpha_out$fit
-min_idx = which.min(alpha_df$Errors)
-opt_fit = fit_list[[min_idx]]
-pred_df = data.frame(sample_id=rownames(test),
-        pred=predict(opt_fit, newx=as.matrix(test), s=opt_fit$lambda.min, type="response")) %>%
-        rename(QDS=s1)
+pred_df = get_pred_df(alpha_out)
 ```
 
 ### Visualize results

@@ -206,6 +206,19 @@ alpha_test = function(x, y, n_alphas, nfolds=NULL, family="gaussian", type.measu
     return(out)
 }
 
+get_pred_df = function(alpha_out) {
+    alpha_df = alpha_out$err
+    fit_list = alpha_out$fit
+    min_idx = which.min(alpha_df$Errors)
+    opt_fit = fit_list[[min_idx]]
+
+    #Predict using optimal model
+    pred_df = data.frame(sample_id=rownames(test),
+            pred=predict(opt_fit, newx=as.matrix(test), s=opt_fit$lambda.min, type="response")) %>%
+            rename(QDS=s1)
+    return(pred_df)
+}
+
 make_boxplot = function(pred_df, ann_df, grouping, title=NULL) {
   pred_df = inner_join(pred_df, ann_df, by=c(sample_id=colnames(ann_df)[1])) 
   p = ggplot(pred_df, aes_string(x=grouping, y="QDS")) +
